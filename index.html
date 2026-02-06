@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>3D Shooter App</title>
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="3D Shooter">
+    <link rel="apple-touch-icon" href="https://via.placeholder.com/192/ffcc00/000000?text=3D">
+
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; touch-action: none; }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 20px; height: 20px; border: 2px solid #ffcc00;
+            border-radius: 50%; transform: translate(-50%, -50%);
+            pointer-events: none; z-index: 999;
+        }
+        #ui {
+            position: absolute; top: 40px; left: 20px; color: #ffcc00;
+            font-size: 18px; font-weight: bold; pointer-events: none; z-index: 10;
+        }
+        #result {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(40,30,0,0.9); color: white; padding: 40px; text-align: center;
+            display: none; border: 4px solid #ffcc00; border-radius: 15px; z-index: 1000;
+            width: 80%;
+        }
+        button { font-size: 20px; padding: 15px 40px; cursor: pointer; background: #ffcc00; color: #000; border: none; font-weight: bold; border-radius: 50px; }
+    </style>
+</head>
+<body>
+    <div id="crosshair"></div>
+    <div id="ui">標的: <span id="count">0</span></div>
+    
+    <div id="result">
+        <h1>MISSION COMPLETE</h1>
+        <button onclick="location.reload()">RETRY</button>
+    </div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        let isFinished = false;
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playSnd(f, t, d) {
+            const o = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            o.type = t; o.frequency.setValueAtTime(f, audioCtx.currentTime);
+            g.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + d);
+            o.connect(g); g.connect(audioCtx.destination);
+            o.start(); o.stop(audioCtx.currentTime + d);
+        }
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050500);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        scene.add(new THREE.GridHelper(100, 40, 0x444400, 0x222200));
+
+        const targets = [];
+        const geometry = new THREE.BoxGeometry(2, 2, 2);
+        for(let x = -2; x <= 2; x++) {
+            for(let y = 0; y <= 1; y++) {
+                const t = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0xffcc00 }));
+                t.position.set(x * 6, y * 4 + 1, -25);
+                t.userData = { speed: 0.05, offset: Math.random() * 10, stop: false };
+                scene.add(t); targets.push(t);
+            }
+        }
+        document.getElementById('count').innerText = targets.length;
+
+        const bullets = [];
+        function shoot() {
+            if(isFinished) return;
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            playSnd(1200, 'sine', 0.05);
+            const b = new THREE.Mesh(new THREE.SphereGeometry(0.2), new THREE.MeshBasicMaterial({color: 0xffffff}));
+            b.position.copy(camera.position);
+            const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            b.velocity = dir.multiplyScalar(1.5);
+            scene.add(b); bullets.push(b);
+        }
+
+        // --- スマホ用タッチ視点移動 ---
+        let lat = 0, lon = 0, pointerX = 0, pointerY = 0;
+        const handleMove = (x, y) => {
+            if(isFinished || pointerX === 0) { pointerX = x; pointerY = y; return; }
+            lon += (pointerX - x) * 0.2;
+            lat += (y - pointerY) * 0.2;
+            lat = Math.max(-85, Math.min(85, lat));
+            pointerX = x; pointerY = y;
+        };
+
+        window.addEventListener('touchmove', (e) => handleMove(e.touches[0].clientX, e.touches[0].clientY), {passive: false});
+        window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
+        window.addEventListener('touchend', shoot);
+        window.addEventListener('mousedown', shoot);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(!isFinished) {
+                const phi = THREE.MathUtils.degToRad(90 - lat);
+                const theta = THREE.MathUtils.degToRad(lon);
+                camera.lookAt(camera.position.clone().add(new THREE.Vector3().setFromSphericalCoords(1, phi, theta)));
+
+                targets.forEach(t => {
+                    if(!t.userData.stop) {
+                        t.position.x += Math.sin(Date.now() * 0.002 + t.userData.offset) * t.userData.speed;
+                        t.position.y += Math.cos(Date.now() * 0.003 + t.userData.offset) * t.userData.speed;
+                    }
+                });
+
+                for(let i = bullets.length - 1; i >= 0; i--) {
+                    const b = bullets[i];
+                    b.position.add(b.velocity);
+                    for(let j = targets.length - 1; j >= 0; j--) {
+                        const t = targets[j];
+                        if(b.position.distanceTo(t.position) < Math.max(0.8, 1.0 * t.scale.x)) {
+                            playSnd(200, 'sawtooth', 0.2);
+                            scene.remove(t); targets.splice(j, 1);
+                            scene.remove(b); bullets.splice(i, 1);
+                            targets.forEach(enemy => {
+                                enemy.scale.multiplyScalar(0.7); 
+                                if (enemy.scale.x <= 0.35) {
+                                    enemy.userData.stop = true;
+                                    enemy.material.color.set(0x555555);
+                                } else {
+                                    enemy.userData.speed += 0.04;
+                                }
+                            });
+                            document.getElementById('count').innerText = targets.length;
+                            if(targets.length === 0) {
+                                isFinished = true;
+                                document.getElementById('result').style.display = 'block';
+                            }
+                            break; 
+                        }
+                    }
+                    if(b && b.position.length() > 100) { scene.remove(b); bullets.splice(i, 1); }
+                }
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
